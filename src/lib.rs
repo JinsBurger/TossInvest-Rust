@@ -3,7 +3,10 @@ use md5;
 use uuid::Uuid;
 use reqwest::header::{HeaderMap, HeaderValue};
 
-const TOSS_WS_URL: &str = "wss://realtime-socket.tossinvest.com/ws";
+pub mod toss_websock;
+use toss_websock::TossWebSock;
+
+
 
 fn get_connection_headers() -> (String, String, String) {
     const url: &str = "https://wts-api.tossinvest.com/api/v3/init";
@@ -44,13 +47,27 @@ fn get_connection_headers() -> (String, String, String) {
     (connection_id.to_string(), device_id, utk_id.to_string())
 }
 
+fn connect(hook: fn(Vec<u8>)) -> TossWebSock {
+    let (conn_id, dev_id, utk_id) =  get_connection_headers();
+    let toss_sock = TossWebSock::new(conn_id, dev_id, utk_id, hook);
+    
+    toss_sock
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn header_test() {
-        let (conn_id, dev_id, utk_id) = get_connection_headers();
-        
+    fn conn_test() {
+        fn hook(data: Vec<u8>) {
+            println!("Len: {}", data.len());
+        }
+        connect(hook);
+
+        loop {
+            let mut str = String::new();
+            std::io::stdin().read_line(&mut str).unwrap();
+        }
     }
 }

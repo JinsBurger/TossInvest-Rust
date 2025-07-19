@@ -11,3 +11,5 @@ md5 = "0.7"
 uuid = {version = "1.17.0", features = ["v4"]}
 reqwest = { version = "0.11", features = ["blocking", "gzip"] }
 flate2 = "1"
+futures-util = "0.3"
+http = "1.0"
