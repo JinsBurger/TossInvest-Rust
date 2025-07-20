@@ -2,19 +2,21 @@ use rand::{distributions::Alphanumeric, Rng};
 use md5;
 use uuid::Uuid;
 use reqwest::header::{HeaderMap, HeaderValue};
+use tokio::io::{BufReader};
 
+pub mod toss_stomper;
 pub mod toss_websock;
 use toss_websock::TossWebSock;
 
 
 
-fn get_connection_headers() -> (String, String, String) {
+async fn get_connection_headers() -> (String, String, String) {
     const url: &str = "https://wts-api.tossinvest.com/api/v3/init";
     let rand_str: String = rand::thread_rng().sample_iter(Alphanumeric).take(35).map(char::from).collect();
     let device_id: String = format!("WTS-{:x}", md5::compute(rand_str.as_bytes()));
     let connection_id = Uuid::new_v4();
 
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let resp = client.get(url)
         .header("accept", "*/*")
         .header("accept-encoding", "gzip, deflate, br, zstd")
@@ -32,7 +34,7 @@ fn get_connection_headers() -> (String, String, String) {
         .header("sec-fetch-mode", "cors")
         .header("sec-fetch-site", "same-site")
         .header("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-        .send().unwrap();
+        .send().await.unwrap();
 
     
     let set_cookies = resp.headers().get_all("Set-Cookie");
@@ -47,27 +49,29 @@ fn get_connection_headers() -> (String, String, String) {
     (connection_id.to_string(), device_id, utk_id.to_string())
 }
 
-fn connect(hook: fn(Vec<u8>)) -> TossWebSock {
-    let (conn_id, dev_id, utk_id) =  get_connection_headers();
+
+async fn connect(hook: fn(Vec<u8>)) -> TossWebSock {
+    let (conn_id, dev_id, utk_id) =  get_connection_headers().await;
     let toss_sock = TossWebSock::new(conn_id, dev_id, utk_id, hook);
-    
     toss_sock
 }
 
 #[cfg(test)]
 mod tests {
+    use std::{thread::sleep, time::Duration};
+
+    use tokio::io::AsyncBufReadExt;
+
     use super::*;
 
-    #[test]
-    fn conn_test() {
+    #[tokio::test]
+    async fn conn_test() {
         fn hook(data: Vec<u8>) {
             println!("Len: {}", data.len());
         }
-        connect(hook);
+        let mut sock: TossWebSock = connect(hook).await;
+        sock.start().await;
 
-        loop {
-            let mut str = String::new();
-            std::io::stdin().read_line(&mut str).unwrap();
-        }
+        tokio::time::sleep(std::time::Duration::from_secs(999_999)).await;
     }
 }
