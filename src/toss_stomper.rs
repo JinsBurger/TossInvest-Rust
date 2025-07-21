@@ -1,4 +1,7 @@
 use std::{collections::HashMap, hash::Hash};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::sync::mpsc;
 
 pub struct TossStomper {
     conn_id: String,
@@ -30,5 +33,15 @@ impl TossStomper {
     pub fn subscribe(&mut self, stock_code: String) -> Vec<u8> {
         let dest = format!("/topic/quote/stock/{}", stock_code);
 
+        let id = self.cur_stk_id;
+        self.stock_id_map.insert(stock_code, id);
+        self.cur_stk_id += 1;
+
+        format!("SUBSCRIBE\nid:{}\nreceipt:{}-sub_receipt\ndestination:{}\n\n\x00\n", id, id, dest).into_bytes()
+    }
+
+    pub fn unsubscribe(&mut self, stock_code: String) -> Vec<u8> {
+        let id = self.stock_id_map.remove(&stock_code).expect("Failed to unsubscribe");
+        format!("UNSUBSCRIBE\nreceipt:{}-sub_receipt\nid:{}\n\n\x00\n", id, id).into_bytes()
     }
 }
