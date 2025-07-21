@@ -7,7 +7,26 @@ use tokio::io::{BufReader};
 pub mod toss_stomper;
 pub mod toss_websock;
 use toss_websock::TossWebSock;
+use std::panic::Location;
 
+
+
+#[track_caller]
+pub fn log_debug_inner(msg: String) {
+    let loc = Location::caller();
+    println!("[{}] ({}:{}) => {}", loc, loc.file(), loc.line(), msg);
+}
+
+
+#[macro_export]
+macro_rules! ts_debug {
+    ($msg:expr) => {
+        crate::log_debug_inner($msg.to_string());
+    };
+    ($fmt:expr, $($args:tt)*) => {
+        crate::log_debug_inner(format!($fmt, $($args)*));
+    }
+}
 
 
 async fn get_connection_headers() -> (String, String, String) {
@@ -46,6 +65,8 @@ async fn get_connection_headers() -> (String, String, String) {
         }
     }
 
+    assert_ne!(utk_id.len(), 0);
+    utk_id = utk_id.split(";").next().unwrap();
     (connection_id.to_string(), device_id, utk_id.to_string())
 }
 
@@ -65,12 +86,13 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn conn_test() {
+    async fn test() {
         fn hook(data: Vec<u8>) {
             println!("Len: {}", data.len());
         }
         let mut sock: TossWebSock = connect(hook).await;
         sock.start().await;
+        sock.register_stock("fuck".to_string()).await;
 
         tokio::time::sleep(std::time::Duration::from_secs(999_999)).await;
     }
