@@ -3,6 +3,9 @@ name = "Toss_Invest_API_Rust"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+debug = []
+
 [dependencies]
 tokio = { version = "1.32.0", features = ["full"] }
 tokio-tungstenite = { version = "0.20", features = ["rustls-tls-webpki-roots"] }
@@ -15,3 +18,5 @@ futures-util = "0.3"
 http = "1.0"
 futures = "0.3"
 url = "2"
+serde_json = { version = "1.0" }
+serde = { version = "1.0",  features = ["derive"] }

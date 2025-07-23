@@ -1,11 +1,14 @@
-use crate::toss_stomper::TossStomper;
 use crate::{ts_debug};
 
+use crate::toss_stomper::{TossStomper, TossStompResponseType};
 use std::str::Bytes;
 use std::time::Duration;
 use std::{
     str::FromStr
 };
+
+use serde::Deserialize;
+use serde_json;
 
 use std::sync::Arc;
 use reqwest::header::HeaderValue;
@@ -16,29 +19,53 @@ use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, Web
 use futures_util::{stream::{SplitSink, SplitStream}, SinkExt, StreamExt};
 use tokio::sync::{mpsc, oneshot};
 
-
 type WsStreamRecv = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
 type WsStreamSend = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
 
 const TOSS_WS_URL: &str = "wss://realtime-socket.tossinvest.com/ws";
 
+
+#[derive(Debug, Deserialize)]
+pub struct Trade {
+    pub code: String,
+    pub dt: String,
+    pub session: String,
+    pub currency: String,
+    pub base: f64,
+    pub close: f64,
+    pub baseKrw: f64,
+    pub closeKrw: f64,
+    pub volume: f64,
+    pub tradeType: String,
+    pub changeType: String,
+    pub tradingStrength: f64,
+    pub cumulativeVolume: f64,
+    pub cumulativeAmount: f64,
+    pub cumulativeAmountKrw: f64,
+}
+
+pub trait TradeHandler: Send + Sync {
+    fn handle_trade(&mut self, trade: Trade);
+}
+
 pub struct TossWebSock {
     conn_id: String,
     dev_id: String,
     utk_id: String,
-    hook: fn(Vec<u8>),
+    responser: Option<Box<dyn TradeHandler>>,
     stomper: TossStomper,
     send_mpsc_tx: Option<mpsc::Sender<Vec<u8>>>
 }
 
+
 impl TossWebSock {
-    pub fn new(conn_id: String, dev_id: String, utk_id: String, hook: fn(Vec<u8>)) -> Self {
+    pub fn new(conn_id: String, dev_id: String, utk_id: String, responser: Box<dyn TradeHandler>) -> Self {
         let stomper = TossStomper::new(conn_id.clone(), dev_id.clone(), utk_id.clone());
         Self { 
             conn_id: conn_id, 
             dev_id: dev_id, 
             utk_id: utk_id, 
-            hook: hook,
+            responser: Some(responser),
             stomper: stomper,
             send_mpsc_tx: None
         }
@@ -58,9 +85,9 @@ impl TossWebSock {
 
 
         let (init_noti_tx, init_noti_rx) = oneshot::channel();
-
+        let responser = self.responser.take().unwrap();
         let th1 = tokio::spawn(async move {
-            Self::ws_recv_handler(recv, Some(toss_mpsc_tx), Some(init_noti_tx)).await;
+            Self::ws_recv_handler(recv, Some(toss_mpsc_tx), Some(init_noti_tx), responser).await;
         });
         let th2 = tokio::spawn(async move  {
             Self::ws_send_handler(send, toss_mpsc_rx).await;
@@ -76,14 +103,23 @@ impl TossWebSock {
 
     /* -- Public callable stock functions -- */
     pub async fn register_stock(&mut self, stock_code: String) {
-        ts_debug!("Register Stock");
+        ts_debug!("Register Stock: {}", stock_code);
+        let subscribe_data = self.stomper.subscribe(stock_code);
+        self.send_mpsc(subscribe_data).await;
+    }
+
+    pub async fn unregister_stock(&mut self, stock_code: String) {
+        ts_debug!("Unregister Stock: {}", stock_code);
+        let unsubscribe_data = self.stomper.unsubscribe(stock_code);
+        self.send_mpsc(unsubscribe_data).await;
     }
 
 
     /* -- Private functions --  */
-    async fn ws_recv_handler(mut toss_ws_rx: WsStreamRecv, toss_mpsc_tx: Option<mpsc::Sender<Vec<u8>>>, mut init_noti_tx: Option<oneshot::Sender<u8>>) {
+
+    /// Processes a single stock trade event.
+    async fn ws_recv_handler(mut toss_ws_rx: WsStreamRecv, toss_mpsc_tx: Option<mpsc::Sender<Vec<u8>>>, mut init_noti_tx: Option<oneshot::Sender<u8>>, mut responser: Box<dyn TradeHandler>) {
         while let Some(msg) = toss_ws_rx.next().await {
-            ts_debug!("ws_recv_handler! {} {} ", msg.as_ref().unwrap().clone(), msg.as_ref().unwrap().clone().len());
             let msg = msg.unwrap().into_text().unwrap();
             
             if msg.len() == 1  && let Some(tx) = toss_mpsc_tx.as_ref() {
@@ -91,14 +127,26 @@ impl TossWebSock {
                 ts_debug!("Send HeartBeat");
                 tx.send("\n".as_bytes().to_vec()).await.expect("Failed to send HeartBeart");
             } else {
-                // MESSAge, RECEIPT, DESCRIBE
                 let parts: Vec<&str> = msg.splitn(2, "\n\n").collect();
                 let header = parts[0];
-                let body = parts[1];
 
-                if header.starts_with("CONNECTED") {
-                    if let Some(noti) = init_noti_tx.take() {
-                        noti.send(0).expect("Fail to notify a intialization");
+                match TossStompResponseType::from_header(header) {
+                    TossStompResponseType::Connected => {
+                        if let Some(noti) = init_noti_tx.take() {
+                            noti.send(0).expect("Fail to notify a intialization");
+                        }
+                    }
+                    TossStompResponseType::Message => {
+                        let body = parts[1].replace("\x00", "");
+                        ts_debug!("MESSAGE: {}",  body);
+                        let trade_info = serde_json::from_str::<Trade>(body.as_str()).expect("Failed to parse json");
+                        responser.handle_trade(trade_info);
+                    }
+                    TossStompResponseType::Receipt => {
+                        ts_debug!("RECEIPT: {}",  msg);
+                    }
+                    TossStompResponseType::Unknown => {
+                        ts_debug!("Unexpected header: {}",  msg);
                     }
                 }
             }
@@ -108,7 +156,6 @@ impl TossWebSock {
     async fn ws_send_handler(mut toss_ws_tx: WsStreamSend, mut toss_mpsc_rx: mpsc::Receiver<Vec<u8>>) {
         loop {
             let usr_msg = toss_mpsc_rx.recv().await.unwrap();
-            ts_debug!("ws_send_handler! {}", usr_msg.len());
             toss_ws_tx.send(Message::binary(usr_msg)).await.expect("ws_send_handler: Failed to send");
             
         }

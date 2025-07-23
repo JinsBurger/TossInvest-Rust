@@ -6,28 +6,31 @@ use tokio::io::{BufReader};
 
 pub mod toss_stomper;
 pub mod toss_websock;
-use toss_websock::TossWebSock;
+use toss_websock::{TossWebSock, TradeHandler};
 use std::panic::Location;
-
-
 
 #[track_caller]
 pub fn log_debug_inner(msg: String) {
     let loc = Location::caller();
-    println!("[{}] ({}:{}) => {}", loc, loc.file(), loc.line(), msg);
+    println!("[{}:{}] => {}",  loc.file(), loc.line(), msg);
 }
 
 
 #[macro_export]
 macro_rules! ts_debug {
     ($msg:expr) => {
-        crate::log_debug_inner($msg.to_string());
+        #[cfg(feature = "debug")]
+        {
+            crate::log_debug_inner($msg.to_string());
+        }
     };
     ($fmt:expr, $($args:tt)*) => {
-        crate::log_debug_inner(format!($fmt, $($args)*));
+        #[cfg(feature = "debug")]
+        {
+            crate::log_debug_inner(format!($fmt, $($args)*));
+        }
     }
 }
-
 
 async fn get_connection_headers() -> (String, String, String) {
     const url: &str = "https://wts-api.tossinvest.com/api/v3/init";
@@ -70,29 +73,40 @@ async fn get_connection_headers() -> (String, String, String) {
     (connection_id.to_string(), device_id, utk_id.to_string())
 }
 
-
-async fn connect(hook: fn(Vec<u8>)) -> TossWebSock {
+pub async fn connect_toss(responsor: Box<dyn TradeHandler>) -> TossWebSock {
     let (conn_id, dev_id, utk_id) =  get_connection_headers().await;
-    let toss_sock = TossWebSock::new(conn_id, dev_id, utk_id, hook);
+    let toss_sock = TossWebSock::new(conn_id, dev_id, utk_id, responsor);
     toss_sock
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{thread::sleep, time::Duration};
-
-    use tokio::io::AsyncBufReadExt;
+    use crate::toss_websock::Trade;
 
     use super::*;
 
     #[tokio::test]
     async fn test() {
-        fn hook(data: Vec<u8>) {
-            println!("Len: {}", data.len());
+        struct TestResponser {}
+        
+        impl TestResponser {
+            pub fn new() -> Self {
+                Self {
+                    
+                }
+            }
         }
-        let mut sock: TossWebSock = connect(hook).await;
+        impl TradeHandler for TestResponser {
+            fn handle_trade(&mut self, trade: Trade) {
+                ts_debug!("{}: {}", trade.code, trade.changeType);
+            }
+        }
+
+        let mut sock: TossWebSock = connect_toss(Box::new(TestResponser::new())).await;
         sock.start().await;
-        sock.register_stock("fuck".to_string()).await;
+        sock.register_stock("AMX0231027004".to_string()).await;
+        sock.register_stock("US20220809012".to_string()).await;
+
 
         tokio::time::sleep(std::time::Duration::from_secs(999_999)).await;
     }

@@ -3,6 +3,27 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::sync::mpsc;
 
+pub enum TossStompResponseType {
+    Connected,
+    Message,
+    Receipt,
+    Unknown,
+}
+
+impl TossStompResponseType {
+    pub fn from_header(header: &str) -> Self {
+        if header.starts_with("CONNECTED") {
+            Self::Connected
+        } else if header.starts_with("MESSAGE") {
+            Self::Message
+        } else if header.starts_with("RECEIPT") {
+            Self::Receipt
+        } else {
+            Self::Unknown
+        }
+    }
+}
+
 pub struct TossStomper {
     conn_id: String,
     dev_id: String,
@@ -10,7 +31,6 @@ pub struct TossStomper {
     stock_id_map: HashMap<String, u32>,
     cur_stk_id: u32
 }
-
 
 impl TossStomper {
     pub fn new(conn_id: String, dev_id: String, utk_id: String) -> Self {
@@ -31,13 +51,13 @@ impl TossStomper {
     }
 
     pub fn subscribe(&mut self, stock_code: String) -> Vec<u8> {
-        let dest = format!("/topic/quote/stock/{}", stock_code);
+        let dest = format!("/topic/v1/us/stock/trade/{}", stock_code);
 
         let id = self.cur_stk_id;
         self.stock_id_map.insert(stock_code, id);
         self.cur_stk_id += 1;
 
-        format!("SUBSCRIBE\nid:{}\nreceipt:{}-sub_receipt\ndestination:{}\n\n\x00\n", id, id, dest).into_bytes()
+        format!("SUBSCRIBE\nid:{}\nreceipt:{}-sub_receipt\ndestination:{}\n\n\x00", id, id, dest).into_bytes()
     }
 
     pub fn unsubscribe(&mut self, stock_code: String) -> Vec<u8> {
