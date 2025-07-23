@@ -1,3 +1,3 @@
 ### Toss Invest Unofficial API Client(Fetcher) for Rust
 
-Developed by [Jinheon Lee(@howdays)](https://x.com/howdays)
+Developed by [Jinheon Lee(@howdays)](https://x.com/howdays1)
